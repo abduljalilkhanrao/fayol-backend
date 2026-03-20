@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from functools import partial
-from typing import List
+from typing import Any, List
 
 import matplotlib
 matplotlib.use("Agg")
@@ -25,6 +25,22 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import HRFlowable, Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table
+
+
+def load_local_env(path: str = ".env") -> None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+    except FileNotFoundError:
+        return
+
+
+load_local_env()
 
 W, H = A4
 
@@ -140,6 +156,93 @@ class SupportReportRequest(BaseModel):
     consultants: List[dict] = Field(default_factory=list)
     monthlyTrend: List[SupportMonthlyTrendItem] = Field(default_factory=list)
     moduleBreakdown: List[SupportModuleBreakdownItem] = Field(default_factory=list)
+
+
+class FinanceMonthlyBreakdownItem(BaseModel):
+    month: str
+    monthKey: str = ""
+    hoursAllocated: float = 0
+    hoursUsed: float = 0
+    revenue: float = 0
+    invoiceRaised: bool = False
+    invoiceStatus: str = ""
+    notes: str = ""
+    periodClosed: bool = False
+    invoiceDate: str = ""
+
+
+class FinanceInvoiceItem(BaseModel):
+    periodLabel: str = ""
+    monthKey: str = ""
+    milestone: str = ""
+    amount: float = 0
+    invoiceRaised: bool = False
+    invoiceDate: str = ""
+    dueDate: str = ""
+    daysSinceDue: int | None = None
+    paid: bool = False
+    paidDate: str = ""
+    status: str = ""
+    periodClosed: bool = False
+    notes: str = ""
+
+
+class FinanceTicketEffortItem(BaseModel):
+    id: str
+    title: str = ""
+    module: str = ""
+    status: str = ""
+    priority: str = ""
+    effortHours: float = 0
+
+
+class FinanceMilestoneItem(BaseModel):
+    milestone: str
+    percentage: float = 0
+    amount: float = 0
+    status: str = ""
+    invoiceRaised: bool = False
+    invoiceDate: str = ""
+    dueDate: str = ""
+    daysSinceDue: int | None = None
+    paid: bool = False
+    paidDate: str = ""
+
+
+class FinanceReportRequest(BaseModel):
+    viewType: str
+    reportDate: str
+    projectId: str = ""
+    projectName: str
+    clientName: str = ""
+    contractType: str = ""
+    contractTypeLabel: str = ""
+    contractValue: float = 0
+    ratePerHr: float = 0
+    monthlyHours: float = 0
+    totalHours: float = 0
+    previousMonthHours: float = 0
+    previousMonthRevenue: float = 0
+    currentMonthHours: float = 0
+    currentMonthRevenue: float = 0
+    projectedMonthEndHours: float = 0
+    hoursRemaining: float = 0
+    hoursRemainingPct: float = 0
+    burnRate: float = 0
+    bucketExhaustionDate: str = ""
+    bucketExhaustionDays: int | None = None
+    assessment: str = ""
+    recognisedRevenue: float = 0
+    pendingRevenue: float = 0
+    outstandingInvoiceCount: int = 0
+    outstandingInvoiceTotal: float = 0
+    percentComplete: float = 0
+    nextMilestoneDue: str = ""
+    projectSnapshot: dict[str, Any] = Field(default_factory=dict)
+    monthlyBreakdown: List[FinanceMonthlyBreakdownItem] = Field(default_factory=list)
+    invoiceHistory: List[FinanceInvoiceItem] = Field(default_factory=list)
+    ticketRows: List[FinanceTicketEffortItem] = Field(default_factory=list)
+    milestoneRows: List[FinanceMilestoneItem] = Field(default_factory=list)
 
 
 def S(name, **kw):
@@ -1249,6 +1352,613 @@ def generate_support_pdf(data: dict) -> bytes:
     return buf.read()
 
 
+FINANCE_AI_SYSTEM_PROMPT = (
+    "You are Fayol Financial PM. Use only the provided data. Return concise, executive-ready financial analysis as strict JSON with keys "
+    "executiveSummary, pros, cons, actionsThisMonth, and actionsNextQuarter. "
+    "executiveSummary must be a short paragraph. The list fields must each contain exactly 3 practical items."
+)
+
+
+def on_finance_page(canvas, doc, project_name, generated_date):
+    canvas.saveState()
+    pw = doc.pagesize[0]
+    ph = doc.pagesize[1]
+
+    if doc.page == 1:
+        canvas.setFillColor(colors.HexColor("#07090F"))
+        canvas.rect(0, ph - 48 * mm, pw, 48 * mm, fill=1, stroke=0)
+        canvas.setFillColor(BLUE)
+        canvas.rect(0, ph - 48 * mm, pw, 1.2 * mm, fill=1, stroke=0)
+        canvas.setFillColor(BLUE)
+        canvas.rect(0, 0, 3, ph, fill=1, stroke=0)
+        canvas.setFillColor(BLUE)
+        canvas.roundRect(15 * mm, ph - 18 * mm, 10 * mm, 10 * mm, 2, fill=1, stroke=0)
+        canvas.setFont("Helvetica-Bold", 12)
+        canvas.setFillColor(WHITE)
+        canvas.drawCentredString(20 * mm, ph - 14 * mm, "F")
+        canvas.setFont("Helvetica-Bold", 16)
+        canvas.setFillColor(WHITE)
+        canvas.drawString(28 * mm, ph - 13.5 * mm, "Fayol")
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#7090B0"))
+        canvas.drawString(28 * mm, ph - 18.5 * mm, "SAP Project Automation")
+        canvas.setFont("Helvetica-Bold", 18)
+        canvas.setFillColor(WHITE)
+        canvas.drawString(15 * mm, ph - 32 * mm, "FAYOL FINANCIAL INTELLIGENCE REPORT")
+        canvas.setFont("Helvetica", 9)
+        canvas.setFillColor(colors.HexColor("#7090B0"))
+        canvas.drawString(15 * mm, ph - 38 * mm, "Confidential - Finance and delivery leadership use only")
+        canvas.setFont("Helvetica-Bold", 11)
+        canvas.setFillColor(colors.HexColor("#A8C4E0"))
+        canvas.drawRightString(pw - 15 * mm, ph - 32 * mm, project_name)
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#7090B0"))
+        canvas.drawRightString(pw - 15 * mm, ph - 38 * mm, generated_date)
+    else:
+        canvas.setFillColor(colors.HexColor("#07090F"))
+        canvas.rect(0, ph - 12 * mm, pw, 12 * mm, fill=1, stroke=0)
+        canvas.setFillColor(BLUE)
+        canvas.rect(0, ph - 12 * mm, pw, 1 * mm, fill=1, stroke=0)
+        canvas.setFont("Helvetica-Bold", 8)
+        canvas.setFillColor(WHITE)
+        canvas.drawString(15 * mm, ph - 8 * mm, "Fayol  Financial Intelligence Report")
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#7090B0"))
+        canvas.drawRightString(pw - 15 * mm, ph - 8 * mm, project_name)
+        canvas.setFillColor(BLUE)
+        canvas.rect(0, 0, 3, ph, fill=1, stroke=0)
+
+    canvas.setFillColor(GREY_LINE)
+    canvas.rect(0, 0, pw, 10 * mm, fill=1, stroke=0)
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColor(GREY_MID)
+    canvas.drawString(15 * mm, 3.5 * mm, "Fayol  SAP Project Automation   |   Confidential")
+    canvas.drawRightString(pw - 15 * mm, 3.5 * mm, f"Page {doc.page}")
+    canvas.restoreState()
+
+
+def parse_finance_ai_response(text: str) -> dict:
+    candidate = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", candidate, flags=re.S)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    if not candidate.startswith("{"):
+        start = candidate.find("{")
+        end = candidate.rfind("}")
+        if start != -1 and end != -1:
+            candidate = candidate[start : end + 1]
+    parsed = json.loads(candidate)
+    return {
+        "executiveSummary": str(parsed.get("executiveSummary", "")).strip(),
+        "pros": [str(item).strip() for item in parsed.get("pros", []) if str(item).strip()][:3],
+        "cons": [str(item).strip() for item in parsed.get("cons", []) if str(item).strip()][:3],
+        "actionsThisMonth": [str(item).strip() for item in parsed.get("actionsThisMonth", []) if str(item).strip()][:3],
+        "actionsNextQuarter": [str(item).strip() for item in parsed.get("actionsNextQuarter", []) if str(item).strip()][:3],
+    }
+
+
+def finance_money(value: float) -> str:
+    return f"${value:,.0f}"
+
+
+def make_support_finance_burn_chart(monthly_rows: List[dict], burn_rate: float, hours_remaining: float, width_mm: float, height_mm: float):
+    rows = monthly_rows or [{"month": "-", "hoursAllocated": 0, "hoursUsed": 0}]
+    months = [row.get("month", "-") for row in rows]
+    allocated = [float(row.get("hoursAllocated", 0) or 0) for row in rows]
+    used = [float(row.get("hoursUsed", 0) or 0) for row in rows]
+    cumulative_allocated = np.cumsum(allocated)
+    cumulative_used = np.cumsum(used)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(width_mm / 25.4, height_mm / 25.4), facecolor="#F1F5F9")
+    fig.patch.set_facecolor("#F1F5F9")
+
+    x = np.arange(len(months))
+    ax1.set_facecolor("#F1F5F9")
+    ax1.plot(x, cumulative_allocated, color="#0A84FF", linewidth=2.4, marker="o", markersize=4.5, markerfacecolor="white", markeredgewidth=1.8)
+    ax1.plot(x, cumulative_used, color="#00A86B", linewidth=2.4, marker="o", markersize=4.5, markerfacecolor="white", markeredgewidth=1.8)
+    ax1.fill_between(x, cumulative_allocated, alpha=0.08, color="#0A84FF")
+    ax1.fill_between(x, cumulative_used, alpha=0.08, color="#00A86B")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(months, fontsize=6.5, color="#2C3E50", rotation=18, ha="right")
+    ax1.tick_params(axis="y", labelsize=7, colors="#64748B")
+    ax1.tick_params(axis="x", length=0)
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
+    ax1.spines["left"].set_color("#E2E8F0")
+    ax1.spines["bottom"].set_color("#E2E8F0")
+    ax1.yaxis.grid(True, color="#E2E8F0", linestyle="--", linewidth=0.5)
+    ax1.set_axisbelow(True)
+    ax1.set_title("Cumulative Hours Consumed vs Allocated", fontsize=8, color="#2C3E50", pad=10, fontweight="bold")
+
+    ax2.set_facecolor("#F1F5F9")
+    projection_days = max(5, min(180, int(np.ceil(hours_remaining / burn_rate)) if burn_rate > 0 else 30))
+    days = np.arange(projection_days + 1)
+    remaining_series = np.maximum(hours_remaining - burn_rate * days, 0)
+    ax2.plot(days, remaining_series, color="#FF3B5C", linewidth=2.4, marker="o", markersize=3.8, markerfacecolor="white", markeredgewidth=1.4)
+    ax2.fill_between(days, remaining_series, alpha=0.10, color="#FF3B5C")
+    ax2.set_xlabel("Days from today", fontsize=7, color="#64748B")
+    ax2.set_ylabel("Remaining hours", fontsize=7, color="#64748B")
+    ax2.tick_params(axis="both", labelsize=7, colors="#64748B")
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+    ax2.spines["left"].set_color("#E2E8F0")
+    ax2.spines["bottom"].set_color("#E2E8F0")
+    ax2.yaxis.grid(True, color="#E2E8F0", linestyle="--", linewidth=0.5)
+    ax2.set_axisbelow(True)
+    ax2.set_title("Projected Bucket Exhaustion", fontsize=8, color="#2C3E50", pad=10, fontweight="bold")
+
+    plt.tight_layout(pad=0.9)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight", facecolor="#F1F5F9")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def make_implementation_revenue_chart(milestone_rows: List[dict], width_mm: float, height_mm: float):
+    rows = milestone_rows or [{"milestone": "-", "amount": 0, "status": "Pending", "invoiceRaised": False}]
+    labels = [row.get("milestone", "-") for row in rows]
+    values = [float(row.get("amount", 0) or 0) for row in rows]
+    bar_colors = []
+    for row in rows:
+        if row.get("status") != "Complete":
+            bar_colors.append("#CBD5E1")
+        elif row.get("invoiceRaised"):
+            bar_colors.append("#00A86B")
+        else:
+            bar_colors.append("#F5A623")
+
+    fig, ax = plt.subplots(figsize=(width_mm / 25.4, height_mm / 25.4), facecolor="#F1F5F9")
+    ax.set_facecolor("#F1F5F9")
+    x = np.arange(len(labels))
+    ax.bar(x, values, color=bar_colors, width=0.58)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=7, color="#2C3E50", rotation=14, ha="right")
+    ax.tick_params(axis="y", labelsize=7, colors="#64748B")
+    ax.tick_params(axis="x", length=0)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#E2E8F0")
+    ax.spines["bottom"].set_color("#E2E8F0")
+    ax.yaxis.grid(True, color="#E2E8F0", linestyle="--", linewidth=0.5)
+    ax.set_axisbelow(True)
+    ax.set_title("Revenue Recognition by Milestone", fontsize=8, color="#2C3E50", pad=10, fontweight="bold")
+    for idx, value in enumerate(values):
+        ax.text(idx, value + max(values + [1]) * 0.03, finance_money(value), ha="center", va="bottom", fontsize=6.5, color="#2C3E50")
+
+    plt.tight_layout(pad=0.8)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight", facecolor="#F1F5F9")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def build_support_burn_analysis(data: dict) -> str:
+    burn_rate = float(data.get("burnRate", 0) or 0)
+    projected = float(data.get("projectedMonthEndHours", 0) or 0)
+    remaining = float(data.get("hoursRemaining", 0) or 0)
+    monthly_hours = float(data.get("monthlyHours", 0) or 0)
+    assessment = data.get("assessment") or "On Track"
+    exhaustion_date = format_support_display_date(data.get("bucketExhaustionDate", ""))
+    if assessment == "Under-utilising":
+        return (
+            f"The client is currently under-utilising its available capacity. At {burn_rate:.1f} hours per day, "
+            f"month-end consumption projects to {projected:.1f} hours against a reference bucket of {monthly_hours:.1f} hours."
+        )
+    if assessment == "At Risk of Early Exhaustion":
+        return (
+            f"The client is at risk of early exhaustion. The current burn rate of {burn_rate:.1f} hours per day would leave only "
+            f"{remaining:.1f} hours available and could deplete the active bucket by {exhaustion_date}."
+        )
+    return (
+        f"Consumption is broadly on track. The current burn rate of {burn_rate:.1f} hours per day projects to "
+        f"{projected:.1f} hours by month end, leaving a manageable balance of {remaining:.1f} hours."
+    )
+
+
+def fallback_support_finance_sections(data: dict) -> dict:
+    missing_invoices = sum(1 for row in data.get("invoiceHistory", []) if row.get("periodClosed") and not row.get("invoiceRaised"))
+    summary = (
+        f"{data.get('projectName', 'This client')} is currently assessed as {str(data.get('assessment', 'on track')).lower()} from a financial standpoint. "
+        f"Current month consumption is {float(data.get('currentMonthHours', 0) or 0):.1f} hours with {finance_money(float(data.get('currentMonthRevenue', 0) or 0))} recognised so far. "
+        f"Remaining capacity stands at {float(data.get('hoursRemaining', 0) or 0):.1f} hours, and the invoice backlog contains {missing_invoices} closed period(s) that still need action."
+    )
+    return {
+        "executiveSummary": summary,
+        "pros": [
+            "Monthly usage visibility is established across the last six periods.",
+            "Current financial signals show a clear burn-rate trend for leadership review.",
+            "Invoice tracking is linked directly to each billing period rather than held offline.",
+        ],
+        "cons": [
+            "Closed billing periods without invoices create avoidable cash-collection risk." if missing_invoices else "No material closed-period invoice gaps are currently visible.",
+            "Bucket utilisation needs active monitoring whenever burn rate accelerates late in the month.",
+            "Ticket effort distribution remains concentrated in a relatively small set of high-effort issues.",
+        ],
+        "actionsThisMonth": [
+            "Raise or reconcile any missing invoices for already-closed periods.",
+            "Review whether the current burn profile supports a top-up or scope reset discussion.",
+            "Challenge the highest-effort tickets for repeatable fixes or preventive actions.",
+        ],
+        "actionsNextQuarter": [
+            "Set a formal monthly finance review using utilisation, billing, and exhaustion risk together.",
+            "Revisit the contracted bucket size against the latest six-month demand pattern.",
+            "Align account leadership and delivery on renewal timing before the bucket tightens further.",
+        ],
+    }
+
+
+def fallback_implementation_finance_sections(data: dict) -> dict:
+    outstanding_count = int(data.get("outstandingInvoiceCount", 0) or 0)
+    summary = (
+        f"{data.get('projectName', 'This implementation')} has recognised {finance_money(float(data.get('recognisedRevenue', 0) or 0))} of "
+        f"{finance_money(float(data.get('contractValue', 0) or 0))}, leaving {finance_money(float(data.get('pendingRevenue', 0) or 0))} still to be earned. "
+        f"The contract is {float(data.get('percentComplete', 0) or 0):.0f}% complete, with {outstanding_count} invoice(s) still unpaid and the next trigger set as {data.get('nextMilestoneDue', 'TBC')}."
+    )
+    return {
+        "executiveSummary": summary,
+        "pros": [
+            "Revenue recognition is tied cleanly to milestone completion events.",
+            "Contract value and pending revenue are visible in a single view.",
+            "Milestone-level invoice status makes overdue billing gaps easy to isolate.",
+        ],
+        "cons": [
+            "Any completed milestone without an invoice raised creates immediate leakage risk.",
+            "Outstanding invoices can distort cash collection even when revenue is already recognised.",
+            "Future milestone timing remains sensitive where pending milestones are clustered close together.",
+        ],
+        "actionsThisMonth": [
+            "Clear any completed milestone that has not yet been invoiced.",
+            "Escalate outstanding invoices with due dates already passed.",
+            "Validate the next milestone documentation pack before the trigger date arrives.",
+        ],
+        "actionsNextQuarter": [
+            "Review whether milestone dates still align with the current delivery plan.",
+            "Tie finance reviews to steering reviews so billing slippage is surfaced earlier.",
+            "Track cash collection separately from revenue recognition for all raised invoices.",
+        ],
+    }
+
+
+def generate_finance_ai_sections(data: dict) -> dict:
+    fallback = fallback_support_finance_sections(data) if data.get("viewType") == "support" else fallback_implementation_finance_sections(data)
+    context_json = json.dumps(data, indent=2)
+    try:
+        response = call_anthropic_text(
+            FINANCE_AI_SYSTEM_PROMPT,
+            "Analyse this Fayol financial dataset and return strict JSON only.\n\n"
+            f"Data:\n{context_json}",
+            max_tokens=600,
+        )
+        parsed = parse_finance_ai_response(response)
+        return {
+            "executiveSummary": parsed["executiveSummary"] or fallback["executiveSummary"],
+            "pros": parsed["pros"] or fallback["pros"],
+            "cons": parsed["cons"] or fallback["cons"],
+            "actionsThisMonth": parsed["actionsThisMonth"] or fallback["actionsThisMonth"],
+            "actionsNextQuarter": parsed["actionsNextQuarter"] or fallback["actionsNextQuarter"],
+        }
+    except Exception:
+        return fallback
+
+
+def finance_kpi_box(label: str, value: str, sub: str, bg, fg, width: float):
+    return Table(
+        [
+            [Paragraph(label, S("fin_kl", fontName="Helvetica", fontSize=7, textColor=fg, leading=10, alignment=TA_CENTER))],
+            [Paragraph(value, S("fin_kv", fontName="Helvetica-Bold", fontSize=14, textColor=fg, leading=18, alignment=TA_CENTER))],
+            [Paragraph(sub, S("fin_ks", fontName="Helvetica", fontSize=7, textColor=fg, leading=10, alignment=TA_CENTER))],
+        ],
+        colWidths=[width],
+        style=[
+            ("BACKGROUND", (0, 0), (-1, -1), bg),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE),
+        ],
+    )
+
+
+def finance_action_table(label: str, items: List[str], bg, lc, width: float):
+    rows = [[Paragraph(label, S("fin_al", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11))]]
+    for idx, item in enumerate(items, 1):
+        rows.append([
+            Table(
+                [[
+                    Paragraph(str(idx), S("fin_an", fontName="Helvetica-Bold", fontSize=10, textColor=lc, leading=14, alignment=TA_CENTER)),
+                    Paragraph(item, sBody),
+                ]],
+                colWidths=[8 * mm, width - 22 * mm],
+                style=[
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ],
+            )
+        ])
+    return Table(
+        rows,
+        colWidths=[width],
+        style=[
+            ("BACKGROUND", (0, 0), (-1, 0), bg),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, GREY_LT]),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 12),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+            ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE),
+        ],
+    )
+
+
+def finance_pros_cons_table(pros: List[str], cons: List[str], width: float):
+    def render_block(title: str, tone, items: List[str]):
+        rows = [[Paragraph(title, S("fin_pc_head", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11))]]
+        for item in items:
+            rows.append([Paragraph(f"- {item}", sBody)])
+        return Table(
+            rows,
+            colWidths=[width / 2 - 4 * mm],
+            style=[
+                ("BACKGROUND", (0, 0), (-1, 0), tone),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, GREY_LT]),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE),
+            ],
+        )
+
+    return Table(
+        [[render_block("PROS", GREEN, pros), render_block("CONS", RED, cons)]],
+        colWidths=[width / 2, width / 2],
+        style=[("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2)],
+    )
+
+
+def generate_support_finance_pdf(data: dict) -> bytes:
+    ai_sections = generate_finance_ai_sections(data)
+    buf = io.BytesIO()
+    project_name = data.get("projectName", "Support Client")
+    report_date = format_support_display_date(data.get("reportDate", ""))
+    snapshot = data.get("projectSnapshot", {})
+    monthly_rows = data.get("monthlyBreakdown", [])
+    invoice_rows = data.get("invoiceHistory", [])
+    ticket_rows = data.get("ticketRows", [])
+    burn_text = build_support_burn_analysis(data)
+
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
+        topMargin=52 * mm,
+        bottomMargin=18 * mm,
+        title="Fayol Financial Intelligence Report",
+    )
+    story = []
+    pw = W - 30 * mm
+
+    snapshot_rows = [
+        [Paragraph("CLIENT", sSectionSm), Paragraph(snapshot.get("client", project_name), sBold), Paragraph("CONTRACT TYPE", sSectionSm), Paragraph(snapshot.get("contractType", data.get("contractTypeLabel", "-")), sBody)],
+        [Paragraph("PERIOD", sSectionSm), Paragraph(snapshot.get("period", "-"), sBody), Paragraph("REPORT DATE", sSectionSm), Paragraph(report_date, sBody)],
+    ]
+    story.append(Table(snapshot_rows, colWidths=[35 * mm, 60 * mm, 35 * mm, 50 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), GREY_LT), ("ROWBACKGROUNDS", (0, 0), (-1, -1), [GREY_LT, WHITE]), ("LINEBELOW", (0, 0), (-1, -2), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(sp(16))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("EXECUTIVE FINANCIAL SUMMARY", sSection))
+    story.append(sp(6))
+    story.append(Paragraph(ai_sections["executiveSummary"], sBody))
+    story.append(sp(16))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("KPI STRIP", sSection))
+    story.append(sp(8))
+    kpi_width = pw / 5 - 2 * mm
+    kpi_row = Table([[
+        finance_kpi_box("MONTHLY REVENUE", finance_money(float(data.get("currentMonthRevenue", 0) or 0)), "Current month", BLUE_LIGHT, BLUE, kpi_width),
+        finance_kpi_box("HOURS USED", f"{float(data.get('currentMonthHours', 0) or 0):.1f}h", "Current month", BLUE_LIGHT, BLUE, kpi_width),
+        finance_kpi_box("HOURS REMAINING", f"{float(data.get('hoursRemaining', 0) or 0):.1f}h", "Active bucket", RED_LT if float(data.get("hoursRemainingPct", 0) or 0) < 20 else (AMBER_LT if float(data.get("hoursRemainingPct", 0) or 0) < 40 else GREEN_LT), RED if float(data.get("hoursRemainingPct", 0) or 0) < 20 else (AMBER if float(data.get("hoursRemainingPct", 0) or 0) < 40 else GREEN), kpi_width),
+        finance_kpi_box("BURN RATE", f"{float(data.get('burnRate', 0) or 0):.1f}/day", "Current pace", AMBER_LT, AMBER, kpi_width),
+        finance_kpi_box("BUCKET EXHAUSTION DATE", format_support_display_date(data.get("bucketExhaustionDate", "")), "Forecast", RED_LT if data.get("bucketExhaustionDays") is not None and int(data.get("bucketExhaustionDays")) <= 30 else GREY_LT, RED if data.get("bucketExhaustionDays") is not None and int(data.get("bucketExhaustionDays")) <= 30 else GREY_DARK, kpi_width),
+    ]], colWidths=[pw / 5] * 5, style=[("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1)])
+    story.append(kpi_row)
+    story.append(sp(16))
+
+    month_table_rows = [[Paragraph(h, S("fin_mh", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11)) for h in ["MONTH", "ALLOCATED", "USED", "REVENUE", "INVOICE RAISED", "INVOICE STATUS", "NOTES"]]]
+    for row in monthly_rows:
+        month_table_rows.append([
+            Paragraph(row.get("month", "-"), sBody),
+            Paragraph(f"{float(row.get('hoursAllocated', 0) or 0):.1f}", sBodySm),
+            Paragraph(f"{float(row.get('hoursUsed', 0) or 0):.1f}", sBodySm),
+            Paragraph(finance_money(float(row.get("revenue", 0) or 0)), sBodySm),
+            Paragraph("Yes" if row.get("invoiceRaised") else "No", sBodySm),
+            Paragraph(row.get("invoiceStatus", "-"), S("fin_ms", fontName="Helvetica-Bold", fontSize=8, textColor=RED if row.get("invoiceStatus") == "Overdue" else (GREEN if row.get("invoiceRaised") else GREY_DARK), leading=11)),
+            Paragraph(row.get("notes", "-"), sBodySm),
+        ])
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("MONTH-BY-MONTH REVENUE AND HOURS", sSection))
+    story.append(sp(8))
+    story.append(Table(month_table_rows, colWidths=[24 * mm, 22 * mm, 18 * mm, 24 * mm, 22 * mm, 24 * mm, pw - 134 * mm], style=[("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#07090F")), *[("BACKGROUND", (0, idx), (-1, idx), GREY_LT if idx % 2 == 1 else WHITE) for idx in range(1, len(month_table_rows))], ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(PageBreak())
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("BURN RATE ANALYSIS", sSection))
+    story.append(sp(6))
+    story.append(Paragraph(f"Current burn rate: <b>{float(data.get('burnRate', 0) or 0):.1f} hrs/day</b><br/>Projected bucket exhaustion date: <b>{format_support_display_date(data.get('bucketExhaustionDate', ''))}</b>", sBody))
+    story.append(sp(8))
+    burn_chart = Image(make_support_finance_burn_chart(monthly_rows, float(data.get("burnRate", 0) or 0), float(data.get("hoursRemaining", 0) or 0), 160, 82), width=160 * mm, height=82 * mm)
+    story.append(Table([[burn_chart]], colWidths=[pw], style=[("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+    story.append(sp(6))
+    story.append(Paragraph(burn_text, sBody))
+    story.append(sp(14))
+
+    invoice_table_rows = [[Paragraph(h, S("fin_ih", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11)) for h in ["PERIOD", "AMOUNT", "INVOICE RAISED", "INVOICE DATE", "STATUS", "NOTES"]]]
+    for row in invoice_rows:
+        status = row.get("status", "-")
+        invoice_table_rows.append([
+            Paragraph(row.get("periodLabel", "-"), sBody),
+            Paragraph(finance_money(float(row.get("amount", 0) or 0)), sBodySm),
+            Paragraph("Yes" if row.get("invoiceRaised") else "No", sBodySm),
+            Paragraph(format_support_display_date(row.get("invoiceDate", "")), sBodySm),
+            Paragraph(status, S("fin_is", fontName="Helvetica-Bold", fontSize=8, textColor=RED if status == "Overdue" else (GREEN if row.get("invoiceRaised") else GREY_DARK), leading=11)),
+            Paragraph(row.get("notes", "-"), sBodySm),
+        ])
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("INVOICE STATUS TRACKER", sSection))
+    story.append(sp(8))
+    story.append(Table(invoice_table_rows, colWidths=[28 * mm, 24 * mm, 24 * mm, 24 * mm, 22 * mm, pw - 122 * mm], style=[("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#07090F")), *[("BACKGROUND", (0, idx), (-1, idx), GREY_LT if idx % 2 == 1 else WHITE) for idx in range(1, len(invoice_table_rows))], ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(sp(14))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("PROS & CONS ANALYSIS", sSection))
+    story.append(sp(8))
+    story.append(finance_pros_cons_table(ai_sections["pros"], ai_sections["cons"], pw))
+    story.append(sp(14))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("RECOMMENDED ACTIONS", sSection))
+    story.append(sp(8))
+    story.append(finance_action_table("THIS MONTH", ai_sections["actionsThisMonth"], RED, RED, pw))
+    story.append(sp(8))
+    story.append(finance_action_table("NEXT QUARTER", ai_sections["actionsNextQuarter"], BLUE, BLUE, pw))
+    story.append(sp(14))
+    story.append(HR(GREY_LINE, 0.5, 4, 4))
+    story.append(Paragraph("This report was generated by Fayol SAP Project Automation. Financial metrics are sourced from the local finance centre workspace and should be validated before external circulation.", S("fin_fn", fontName="Helvetica", fontSize=7, textColor=GREY_MID, leading=11, alignment=TA_CENTER)))
+
+    doc.build(story, onFirstPage=partial(on_finance_page, project_name=project_name, generated_date=report_date), onLaterPages=partial(on_finance_page, project_name=project_name, generated_date=report_date))
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_implementation_finance_pdf(data: dict) -> bytes:
+    ai_sections = generate_finance_ai_sections(data)
+    buf = io.BytesIO()
+    project_name = data.get("projectName", "Implementation Project")
+    report_date = format_support_display_date(data.get("reportDate", ""))
+    snapshot = data.get("projectSnapshot", {})
+    milestone_rows = data.get("milestoneRows", [])
+    invoice_rows = data.get("invoiceHistory", [])
+
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
+        topMargin=52 * mm,
+        bottomMargin=18 * mm,
+        title="Fayol Financial Intelligence Report",
+    )
+    story = []
+    pw = W - 30 * mm
+
+    snapshot_rows = [
+        [Paragraph("CLIENT", sSectionSm), Paragraph(snapshot.get("client", project_name), sBold), Paragraph("COUNTRY", sSectionSm), Paragraph(snapshot.get("country", "-"), sBody)],
+        [Paragraph("CURRENT PHASE", sSectionSm), Paragraph(snapshot.get("phase", "-"), sBody), Paragraph("REPORT DATE", sSectionSm), Paragraph(report_date, sBody)],
+        [Paragraph("PLANNED GO-LIVE", sSectionSm), Paragraph(format_support_display_date(snapshot.get("plannedGoLive", "")), sBody), Paragraph("HEALTH", sSectionSm), Paragraph(snapshot.get("health", "-"), sBody)],
+    ]
+    story.append(Table(snapshot_rows, colWidths=[35 * mm, 55 * mm, 35 * mm, 55 * mm], style=[("BACKGROUND", (0, 0), (-1, -1), GREY_LT), ("ROWBACKGROUNDS", (0, 0), (-1, -1), [GREY_LT, WHITE, GREY_LT]), ("LINEBELOW", (0, 0), (-1, -2), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(sp(16))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("EXECUTIVE FINANCIAL SUMMARY", sSection))
+    story.append(sp(6))
+    story.append(Paragraph(ai_sections["executiveSummary"], sBody))
+    story.append(sp(16))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("KPI STRIP", sSection))
+    story.append(sp(8))
+    kpi_width = pw / 5 - 2 * mm
+    story.append(Table([[
+        finance_kpi_box("CONTRACT VALUE", finance_money(float(data.get("contractValue", 0) or 0)), "Booked value", BLUE_LIGHT, BLUE, kpi_width),
+        finance_kpi_box("RECOGNISED REVENUE", finance_money(float(data.get("recognisedRevenue", 0) or 0)), "Completed milestones", GREEN_LT, GREEN, kpi_width),
+        finance_kpi_box("PENDING REVENUE", finance_money(float(data.get("pendingRevenue", 0) or 0)), "Incomplete milestones", AMBER_LT, AMBER, kpi_width),
+        finance_kpi_box("INVOICES OUTSTANDING", f"{int(data.get('outstandingInvoiceCount', 0) or 0)} | {finance_money(float(data.get('outstandingInvoiceTotal', 0) or 0))}", "Raised and unpaid", RED_LT, RED, kpi_width),
+        finance_kpi_box("% COMPLETE", f"{float(data.get('percentComplete', 0) or 0):.0f}%", "Revenue basis", BLUE_LIGHT, BLUE, kpi_width),
+    ]], colWidths=[pw / 5] * 5, style=[("LEFTPADDING", (0, 0), (-1, -1), 1), ("RIGHTPADDING", (0, 0), (-1, -1), 1)]))
+    story.append(PageBreak())
+
+    milestone_table_rows = [[Paragraph(h, S("fin_th", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11)) for h in ["MILESTONE", "%", "AMOUNT", "STATUS", "INVOICE RAISED", "INVOICE DATE", "DAYS SINCE DUE"]]]
+    for row in milestone_rows:
+        row_color = GREY_MID if row.get("status") != "Complete" else (GREEN if row.get("invoiceRaised") else RED)
+        milestone_table_rows.append([
+            Paragraph(row.get("milestone", "-"), sBody),
+            Paragraph(f"{float(row.get('percentage', 0) or 0):.0f}%", sBodySm),
+            Paragraph(finance_money(float(row.get("amount", 0) or 0)), sBodySm),
+            Paragraph(row.get("status", "-"), S("fin_ts", fontName="Helvetica-Bold", fontSize=8, textColor=row_color, leading=11)),
+            Paragraph("Yes" if row.get("invoiceRaised") else "No", sBodySm),
+            Paragraph(format_support_display_date(row.get("invoiceDate", "")), sBodySm),
+            Paragraph("-" if row.get("daysSinceDue") is None else f"{int(row.get('daysSinceDue'))}d", S("fin_td", fontName="Helvetica-Bold", fontSize=8, textColor=RED if row.get("daysSinceDue") is not None and int(row.get("daysSinceDue")) > 0 else GREY_DARK, leading=11)),
+        ])
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("MILESTONE BILLING TRACKER", sSection))
+    story.append(sp(8))
+    story.append(Table(milestone_table_rows, colWidths=[42 * mm, 12 * mm, 24 * mm, 18 * mm, 22 * mm, 24 * mm, pw - 142 * mm], style=[("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#07090F")), *[("BACKGROUND", (0, idx), (-1, idx), GREY_LT if idx % 2 == 1 else WHITE) for idx in range(1, len(milestone_table_rows))], ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(sp(14))
+
+    revenue_chart = Image(make_implementation_revenue_chart(milestone_rows, 150, 76), width=150 * mm, height=76 * mm)
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("REVENUE RECOGNITION CHART", sSection))
+    story.append(sp(8))
+    story.append(Table([[revenue_chart]], colWidths=[pw], style=[("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+    story.append(sp(14))
+
+    aging_rows = [[Paragraph(h, S("fin_ah", fontName="Helvetica-Bold", fontSize=8, textColor=WHITE, leading=11)) for h in ["MILESTONE", "AMOUNT", "INVOICE RAISED", "INVOICE DATE", "DUE DATE", "AGING", "STATUS"]]]
+    for row in invoice_rows:
+        days = row.get("daysSinceDue")
+        flagged = days is not None and int(days) > 0 and row.get("invoiceRaised") and not row.get("paid")
+        status = "Paid" if row.get("paid") else ("Outstanding" if row.get("invoiceRaised") else "Not Raised")
+        aging_rows.append([
+            Paragraph(row.get("milestone", "-"), sBody),
+            Paragraph(finance_money(float(row.get("amount", 0) or 0)), sBodySm),
+            Paragraph("Yes" if row.get("invoiceRaised") else "No", sBodySm),
+            Paragraph(format_support_display_date(row.get("invoiceDate", "")), sBodySm),
+            Paragraph(format_support_display_date(row.get("dueDate", "")), sBodySm),
+            Paragraph("-" if days is None else f"{int(days)}d", S("fin_ag", fontName="Helvetica-Bold", fontSize=8, textColor=RED if flagged else GREY_DARK, leading=11)),
+            Paragraph(status, S("fin_ast", fontName="Helvetica-Bold", fontSize=8, textColor=RED if flagged else (GREEN if row.get("paid") else AMBER), leading=11)),
+        ])
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("INVOICE STATUS & AGING", sSection))
+    story.append(sp(8))
+    story.append(Table(aging_rows, colWidths=[42 * mm, 24 * mm, 20 * mm, 22 * mm, 22 * mm, 14 * mm, pw - 144 * mm], style=[("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#07090F")), *[("BACKGROUND", (0, idx), (-1, idx), GREY_LT if idx % 2 == 1 else WHITE) for idx in range(1, len(aging_rows))], ("LINEBELOW", (0, 0), (-1, -1), 0.5, GREY_LINE), ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7), ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8), ("BOX", (0, 0), (-1, -1), 0.5, GREY_LINE)]))
+    story.append(sp(14))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("PROS & CONS", sSection))
+    story.append(sp(8))
+    story.append(finance_pros_cons_table(ai_sections["pros"], ai_sections["cons"], pw))
+    story.append(sp(14))
+
+    story.append(HR(BLUE, 1.5, 0, 6))
+    story.append(Paragraph("RECOMMENDED ACTIONS", sSection))
+    story.append(sp(8))
+    story.append(finance_action_table("THIS MONTH", ai_sections["actionsThisMonth"], RED, RED, pw))
+    story.append(sp(8))
+    story.append(finance_action_table("NEXT QUARTER", ai_sections["actionsNextQuarter"], BLUE, BLUE, pw))
+    story.append(sp(14))
+    story.append(HR(GREY_LINE, 0.5, 4, 4))
+    story.append(Paragraph("This report was generated by Fayol SAP Project Automation. Financial milestone and invoice metrics are sourced from the local finance centre workspace and should be validated before external circulation.", S("fin_impl_fn", fontName="Helvetica", fontSize=7, textColor=GREY_MID, leading=11, alignment=TA_CENTER)))
+
+    doc.build(story, onFirstPage=partial(on_finance_page, project_name=project_name, generated_date=report_date), onLaterPages=partial(on_finance_page, project_name=project_name, generated_date=report_date))
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_finance_pdf(data: dict) -> bytes:
+    if data.get("viewType") == "support":
+        return generate_support_finance_pdf(data)
+    return generate_implementation_finance_pdf(data)
+
+
 def sanitize_filename(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", (value or "project").strip().lower()).strip("-")
     return normalized or "project"
@@ -1257,7 +1967,7 @@ def sanitize_filename(value: str) -> str:
 app = FastAPI(title="Fayol Report API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1281,6 +1991,18 @@ async def generate_support_report(payload: SupportReportRequest):
     report_data.update(generate_support_ai_sections(report_data))
     pdf_bytes = generate_support_pdf(report_data)
     file_name = f'fayol-support-report-{sanitize_filename(payload.reportDate)}.pdf'
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
+
+
+@app.post("/api/generate-finance-report")
+async def generate_finance_report(payload: FinanceReportRequest):
+    report_data = payload.model_dump()
+    pdf_bytes = generate_finance_pdf(report_data)
+    file_name = f'fayol-finance-report-{sanitize_filename(payload.projectName)}.pdf'
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
