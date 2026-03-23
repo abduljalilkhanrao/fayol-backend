@@ -1967,7 +1967,7 @@ def sanitize_filename(value: str) -> str:
 app = FastAPI(title="Fayol Report API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://fayol-demo.vercel.app", "https://fayolsolutions.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
