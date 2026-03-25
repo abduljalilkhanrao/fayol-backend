@@ -8,9 +8,15 @@ from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-JWT_SECRET: str = os.environ.get("JWT_SECRET", "")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
+
+
+def _get_jwt_secret() -> str:
+    secret = os.environ.get("JWT_SECRET", "")
+    if not secret:
+        raise RuntimeError("JWT_SECRET environment variable is not set")
+    return secret
 
 
 def hash_password(password: str) -> str:
@@ -22,8 +28,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def create_access_token(subject: str, extra: dict | None = None) -> str:
-    if not JWT_SECRET:
-        raise RuntimeError("JWT_SECRET environment variable is not set")
+    secret = _get_jwt_secret()
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
@@ -31,13 +36,12 @@ def create_access_token(subject: str, extra: dict | None = None) -> str:
         "exp": now + timedelta(hours=JWT_EXPIRE_HOURS),
         **(extra or {}),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
 def decode_access_token(token: str) -> dict:
-    if not JWT_SECRET:
-        raise RuntimeError("JWT_SECRET environment variable is not set")
+    secret = _get_jwt_secret()
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
     except JWTError:
         return {}
