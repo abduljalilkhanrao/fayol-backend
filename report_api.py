@@ -1977,6 +1977,16 @@ app.add_middleware(
 app.include_router(auth_router)
 
 
+@app.get("/api/health")
+async def health_check():
+    import os as _os
+    return {
+        "status": "ok",
+        "jwt_secret_set": bool(_os.environ.get("JWT_SECRET")),
+        "database_url_set": bool(_os.environ.get("DATABASE_URL")),
+    }
+
+
 @app.post("/api/generate-report")
 async def generate_report(payload: ReportRequest):
     pdf_bytes = generate_pdf(payload.model_dump())
