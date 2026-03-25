@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
+import ssl
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 load_dotenv()
@@ -20,7 +22,16 @@ def _get_database_url() -> str:
 
 DATABASE_URL: str = _get_database_url()
 
-engine = create_async_engine(DATABASE_URL, echo=False) if DATABASE_URL else None
+# Supabase requires SSL; create a permissive SSL context for asyncpg
+_ssl_context = ssl.create_default_context()
+_ssl_context.check_hostname = False
+_ssl_context.verify_mode = ssl.CERT_NONE
+
+engine = (
+    create_async_engine(DATABASE_URL, echo=False, connect_args={"ssl": _ssl_context})
+    if DATABASE_URL
+    else None
+)
 
 async_session = (
     async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
