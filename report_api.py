@@ -1980,11 +1980,23 @@ app.include_router(auth_router)
 @app.get("/api/health")
 async def health_check():
     import os as _os
-    return {
+    import traceback as _tb
+    result = {
         "status": "ok",
         "jwt_secret_set": bool(_os.environ.get("JWT_SECRET")),
         "database_url_set": bool(_os.environ.get("DATABASE_URL")),
     }
+    # Test DB connectivity
+    try:
+        from db.config import get_session
+        async for session in get_session():
+            from sqlalchemy import text
+            await session.execute(text("SELECT 1"))
+            result["db_connected"] = True
+    except Exception as e:
+        result["db_connected"] = False
+        result["db_error"] = f"{type(e).__name__}: {e}"
+    return result
 
 
 @app.post("/api/generate-report")
