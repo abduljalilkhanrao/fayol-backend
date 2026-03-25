@@ -12,6 +12,8 @@ load_dotenv()
 
 def _get_database_url() -> str:
     url = os.environ.get("DATABASE_URL", "")
+    # Strip ?pgbouncer=true — asyncpg doesn't understand it
+    url = url.split("?")[0]
     # Railway provides postgres:// but asyncpg needs postgresql+asyncpg://
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -27,8 +29,14 @@ _ssl_context = ssl.create_default_context()
 _ssl_context.check_hostname = False
 _ssl_context.verify_mode = ssl.CERT_NONE
 
+# prepared_statement_cache_size=0 is required when connecting through PgBouncer
 engine = (
-    create_async_engine(DATABASE_URL, echo=False, connect_args={"ssl": _ssl_context})
+    create_async_engine(
+        DATABASE_URL,
+        echo=False,
+        connect_args={"ssl": _ssl_context, "prepared_statement_cache_size": 0},
+        pool_pre_ping=True,
+    )
     if DATABASE_URL
     else None
 )
