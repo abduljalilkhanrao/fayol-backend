@@ -4,7 +4,7 @@ import os
 from logging.config import fileConfig
 
 from dotenv import load_dotenv
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, engine_from_config, pool
 
 from alembic import context
 from db.models import Base
@@ -21,7 +21,8 @@ if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 elif database_url.startswith("postgresql+asyncpg://"):
     database_url = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-config.set_main_option("sqlalchemy.url", database_url)
+# Escape % for configparser interpolation (% in URLs like %40 for @)
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 # Python logging
 if config.config_file_name is not None:
