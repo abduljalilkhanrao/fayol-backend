@@ -8,9 +8,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
-import secrets
 from datetime import date
 from decimal import Decimal
 
@@ -22,14 +20,7 @@ load_dotenv()
 from db.config import _get_database_url  # noqa: E402
 from db.models import Base, Tenant, User  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Simple password hashing (placeholder until a proper auth library is added)
-# ---------------------------------------------------------------------------
-
-def _hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    hashed = hashlib.sha256(f"{salt}${password}".encode()).hexdigest()
-    return f"{salt}${hashed}"
+from auth.security import hash_password as _hash_password
 
 
 # ---------------------------------------------------------------------------
