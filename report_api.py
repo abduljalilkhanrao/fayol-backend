@@ -1965,6 +1965,7 @@ def sanitize_filename(value: str) -> str:
 
 
 from auth.routes import router as auth_router
+from audit.routes import router as audit_router
 
 app = FastAPI(title="Fayol Report API")
 app.add_middleware(
@@ -1975,6 +1976,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router)
+app.include_router(audit_router)
 
 
 @app.get("/api/health")

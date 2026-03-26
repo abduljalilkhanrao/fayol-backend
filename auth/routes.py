@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from audit.service import log_action
 from auth.security import create_access_token, decode_access_token, hash_password, verify_password
 from db.config import get_session
 from db.models import User
@@ -83,7 +84,10 @@ def _user_profile(user: User) -> UserProfile:
 # ---------- endpoints ----------
 
 @router.post("/login", response_model=LoginResponse)
-async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)):
+async def login(body: LoginRequest, request: Request, session: AsyncSession = Depends(get_session)):
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else None)
+    ua = request.headers.get("user-agent")
+
     stmt = select(User).options(joinedload(User.tenant)).where(User.email == body.email)
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
@@ -106,6 +110,12 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)
         if user.failed_login_attempts >= LOCKOUT_ATTEMPTS:
             user.locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
         await session.commit()
+        await log_action(
+            session, tenant_id=user.tenant_id, user_id=user.id,
+            action="user.login_failed", entity_type="user", entity_id=str(user.id),
+            new_value={"email": body.email, "attempts": user.failed_login_attempts},
+            ip_address=ip, user_agent=ua,
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     # Successful login — reset lockout counters, update last_login
@@ -113,6 +123,12 @@ async def login(body: LoginRequest, session: AsyncSession = Depends(get_session)
     user.locked_until = None
     user.last_login = now
     await session.commit()
+
+    await log_action(
+        session, tenant_id=user.tenant_id, user_id=user.id,
+        action="user.login", entity_type="user", entity_id=str(user.id),
+        ip_address=ip, user_agent=ua,
+    )
 
     token = create_access_token(str(user.id))
     return LoginResponse(token=token, user=_user_profile(user))
@@ -126,6 +142,7 @@ async def me(user: User = Depends(_get_current_user)):
 @router.post("/change-password")
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request,
     user: User = Depends(_get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -134,4 +151,11 @@ async def change_password(
 
     user.password_hash = hash_password(body.new_password)
     await session.commit()
+
+    await log_action(
+        session, tenant_id=user.tenant_id, user_id=user.id,
+        action="user.password_changed", entity_type="user", entity_id=str(user.id),
+        ip_address=request.headers.get("x-forwarded-for", request.client.host if request.client else None),
+        user_agent=request.headers.get("user-agent"),
+    )
     return {"message": "Password updated successfully"}
