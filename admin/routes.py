@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -129,6 +129,69 @@ class PaginatedTenants(BaseModel):
 class PasswordResetResult(BaseModel):
     temporary_password: str
     message: str
+
+
+class DashboardOut(BaseModel):
+    total_tenants: int
+    active_tenants: int
+    paused_tenants: int
+    total_users: int
+    total_arr: Decimal
+    expiring_soon: int
+
+
+# ---------- dashboard ----------
+
+@router.get("/dashboard", response_model=DashboardOut)
+async def admin_dashboard(
+    user: User = Depends(_get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    _require_super_admin(user)
+
+    now = datetime.now(timezone.utc).date()
+    soon = now + timedelta(days=30)
+
+    # Non-deleted tenants
+    non_deleted = select(Tenant).where(Tenant.status != "deleted")
+    total_tenants = (await session.execute(
+        select(func.count()).select_from(non_deleted.subquery())
+    )).scalar_one()
+
+    active_tenants = (await session.execute(
+        select(func.count()).where(Tenant.status == "active")
+    )).scalar_one()
+
+    paused_tenants = (await session.execute(
+        select(func.count()).where(Tenant.status == "paused")
+    )).scalar_one()
+
+    total_users = (await session.execute(
+        select(func.count()).where(User.is_active == True)
+    )).scalar_one()
+
+    arr_result = (await session.execute(
+        select(func.coalesce(func.sum(Tenant.arr), 0)).where(Tenant.status == "active")
+    )).scalar_one()
+    total_arr = Decimal(str(arr_result))
+
+    expiring_soon = (await session.execute(
+        select(func.count()).where(
+            Tenant.status == "active",
+            Tenant.contract_end != None,
+            Tenant.contract_end >= now,
+            Tenant.contract_end <= soon,
+        )
+    )).scalar_one()
+
+    return DashboardOut(
+        total_tenants=total_tenants,
+        active_tenants=active_tenants,
+        paused_tenants=paused_tenants,
+        total_users=total_users,
+        total_arr=total_arr,
+        expiring_soon=expiring_soon,
+    )
 
 
 # ---------- tenant endpoints ----------
