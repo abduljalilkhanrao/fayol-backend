@@ -35,6 +35,9 @@ class Tenant(Base):
     arr: Mapped[Decimal | None] = mapped_column(
         Numeric(precision=14, scale=2), nullable=True
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
