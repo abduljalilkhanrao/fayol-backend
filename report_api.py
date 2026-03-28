@@ -1967,6 +1967,7 @@ def sanitize_filename(value: str) -> str:
 from admin.routes import router as admin_router
 from auth.routes import router as auth_router
 from audit.routes import router as audit_router
+from mail.oauth import router as email_router
 
 app = FastAPI(title="Fayol Report API")
 app.add_middleware(
@@ -1979,6 +1980,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(audit_router)
 app.include_router(admin_router)
+app.include_router(email_router)
 
 
 @app.get("/api/health")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -15,6 +17,12 @@ from auth.routes import _get_current_user
 from auth.security import hash_password
 from db.config import get_session
 from db.models import Tenant, User
+from mail.service import send_email
+from mail.templates import password_reset_email, welcome_email
+
+logger = logging.getLogger(__name__)
+
+LOGIN_URL = os.environ.get("FAYOL_LOGIN_URL", "https://fayolsolutions.com/login")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -479,6 +487,19 @@ async def create_user(
         ip_address=ip, user_agent=ua,
     )
 
+    # Send welcome email (best-effort, don't fail the request)
+    try:
+        subj, html = welcome_email(
+            user_name=body.full_name,
+            email=body.email,
+            temp_password=body.password,
+            tenant_name=tenant.name,
+            login_url=LOGIN_URL,
+        )
+        await send_email(to=body.email, subject=subj, html_body=html)
+    except Exception:
+        logger.exception("Failed to send welcome email to %s", body.email)
+
     return UserOut(
         id=str(new_user.id), email=new_user.email, full_name=new_user.full_name,
         role=new_user.role, is_active=new_user.is_active,
@@ -583,6 +604,17 @@ async def reset_password(
         new_value={"email": target.email, "reset_by": str(user.id)},
         ip_address=ip, user_agent=ua,
     )
+
+    # Send password reset email (best-effort, don't fail the request)
+    try:
+        subj, html = password_reset_email(
+            user_name=target.full_name,
+            temp_password=temp_password,
+            login_url=LOGIN_URL,
+        )
+        await send_email(to=target.email, subject=subj, html_body=html)
+    except Exception:
+        logger.exception("Failed to send password reset email to %s", target.email)
 
     return PasswordResetResult(
         temporary_password=temp_password,
