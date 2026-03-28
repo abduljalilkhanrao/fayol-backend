@@ -5,7 +5,7 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -152,3 +152,66 @@ class OAuthToken(Base):
 
     def __repr__(self) -> str:
         return f"<OAuthToken {self.provider} {self.email_address}>"
+
+
+class TenantConfig(Base):
+    __tablename__ = "tenant_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), unique=True, nullable=False
+    )
+    sla_matrix: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    effort_bucket_type: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )  # retainer / t&m / per_module
+    effort_bucket_hours: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=10, scale=2), nullable=True
+    )
+    effort_rate_per_hour: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=10, scale=2), nullable=True
+    )
+    billing_currency: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="USD", server_default="USD"
+    )
+    billing_cycle: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )  # monthly / quarterly / annual
+    milestone_billing_split: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    escalation_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    health_score_weights: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    modules: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    notification_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<TenantConfig tenant={self.tenant_id}>"
+
+
+class PermissionGroup(Base):
+    __tablename__ = "permission_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True
+    )  # null = platform default
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    permissions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<PermissionGroup {self.name}>"
