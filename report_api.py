@@ -1973,7 +1973,7 @@ from mail.oauth import router as email_router
 app = FastAPI(title="Fayol Report API")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://fayol-demo.vercel.app", "https://fayolsolutions.com"],
+    allow_origins=["http://localhost:5173", "https://fayol-demo.vercel.app", "https://fayolsolutions.com", "https://www.fayolsolutions.com", "https://fayol-production.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
